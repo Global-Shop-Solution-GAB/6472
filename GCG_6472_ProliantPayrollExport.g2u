@@ -1,0 +1,138 @@
+Program.Sub.Preflight.Start
+	V.Global.sFileLocation.Declare(string,"")
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+	'Hook: 15290 (Payroll Transfer File Create)
+	'Passed vars: BEGDATE, ENDDATE
+	f.Intrinsic.Control.If(v.Caller.Hook,=,15290)
+		'creating custom dir that the payroll export file will be saved to
+		F.Intrinsic.Control.CallSub(Create_Dir)
+		'Create the actual file
+		f.Intrinsic.Control.CallSub(CreateFile)
+	f.Intrinsic.Control.EndIf
+Program.Sub.Main.End
+
+Program.Sub.CreateFile.Start
+	f.Intrinsic.Control.Try
+		V.Local.sSql.Declare(String,"")
+		V.Local.sDateTime.Declare(String,"")
+		V.Local.sTemp.Declare(String,"")
+		V.Local.sData.Declare(String,"")
+		V.Local.sFile.Declare(String,"")
+		V.Local.i.Declare(Long,0)
+		V.Local.sDate.Declare(String,"")
+		V.Local.sTime.Declare(String,"")
+		v.Local.dBeginDate.Declare(date)
+		v.Local.dEndDate.Declare(date)
+		v.Local.dDateTimeFormat.declare(date)
+		
+		F.Intrinsic.UI.InvokeWaitDialog("Building Proliant Payroll File.....................")
+		
+		F.ODBC.Connection!Con.OpenCompanyConnection
+		
+		'building file name for default export if the user somehow clicks cancel when prompted for save location later.
+		F.Intrinsic.String.Format(V.Ambient.Now,"MMDDYY_HhNnSs",V.Local.sDateTime)
+		F.Intrinsic.String.Build("{0}ProliantExport_{1}.csv",V.Global.sFileLocation,V.Local.sDateTime,V.Local.sFile)
+		
+		'Convert dates passed to actual dates
+		f.Intrinsic.date.ConvertDString(v.Passed.begdate,"YYYYMMDD",v.Local.dBeginDate)
+		f.Intrinsic.date.ConvertDString(v.Passed.enddate,"YYYYMMDD",v.Local.dEndDate)
+		
+		F.Intrinsic.String.Build("Select Date_In, Date_Out, Employee, Time_In, Time_Out From v_TIME_ATTENDANCE Where Date_In Between '{0}' and '{1}' Order by Date_In, Employee",v.Local.dBeginDate.PervasiveDate,V.local.dEndDate.PervasiveDate,V.Local.sSql)
+		
+		F.Data.DataTable.CreateFromSQL("Time","con",V.Local.sSql,True)
+		
+		F.Intrinsic.Control.For(V.Local.i,0,V.DataTable.Time.RowCount--,1)
+			'Convert date in to value to send to the file
+			F.Intrinsic.String.Format(v.DataTable.Time(v.Local.i).Date_In!FieldVal,"m/d/yyyy",v.Local.sDate)
+			'Convert time to hours and minutes
+			f.Intrinsic.Date.CombineDateTime(v.DataTable.Time(v.Local.i).Date_In!FieldVal,v.DataTable.Time(v.Local.i).Time_In!FieldVal,v.Local.dDateTimeFormat)
+			f.Intrinsic.String.Format(v.Local.dDateTimeFormat,"Hh:Nn",v.Local.sTime)
+			'Build line for punch in
+			f.Intrinsic.String.Build("{0}{1},1,{2},{3},0,0,0,0{4}",v.Local.sData,v.DataTable.Time(v.Local.i).Employee!FieldVal,v.Local.sDate,v.Local.sTime,v.Ambient.NewLine,v.Local.sData)
+			
+			'Convert date out to value to send to the file
+			F.Intrinsic.String.Format(v.DataTable.Time(v.Local.i).Date_Out!FieldVal,"m/d/yyyy",v.Local.sDate)
+			'Convert time to hours and minutes
+			f.Intrinsic.Date.CombineDateTime(v.DataTable.Time(v.Local.i).Date_Out!FieldVal,v.DataTable.Time(v.Local.i).Time_Out!FieldVal,v.Local.dDateTimeFormat)
+			f.Intrinsic.String.Format(v.Local.dDateTimeFormat,"Hh:Nn",v.Local.sTime)
+			'f.Intrinsic.String.Format(v.DataTable.Time(v.Local.i).Time_Out!FieldVal,"Hh Nn",v.Local.sTime)
+			'Build line for punch out
+			f.Intrinsic.String.Build("{0}{1},1,{2},{3},0,0,0,0{4}",v.Local.sData,v.DataTable.Time(v.Local.i).Employee!FieldVal,v.Local.sDate,v.Local.sTime,v.Ambient.NewLine,v.Local.sData)
+		F.Intrinsic.Control.Next(V.Local.i)
+		
+		F.Intrinsic.Control.If(V.DataTable.Time.RowCount--,<>,-1)
+			'Prompt the user for a save file location, then open the file automatically.
+			F.Intrinsic.String.Build("ProliantExport_{0}.csv",V.Local.sDateTime,V.Local.sTemp)
+			F.Intrinsic.UI.ShowSaveFileDialog(V.Local.sTemp,"CSV[.csv]|*.csv",V.Local.sTemp)
+			
+			F.Intrinsic.Control.If(V.Local.sTemp,<>,"***CANCEL***")
+				F.Intrinsic.File.String2File(V.Local.sTemp,V.Local.sData)
+				F.Intrinsic.Task.ShellExec(V.Caller.Handle,"",V.Local.sTemp,"","",1)
+			F.Intrinsic.Control.Else
+				F.Intrinsic.File.String2File(V.Local.sFile,V.Local.sData)
+				F.Intrinsic.UI.Msgbox("File has been saved to GSS custom folder by default so that data will not be lost.  Click OK to open folder.") 
+				F.Intrinsic.Task.ShellExec(V.Caller.Handle,"",V.Global.sFileLocation,"","",1)
+			F.Intrinsic.Control.EndIf
+			F.Data.DataTable.Close("Time")
+		F.Intrinsic.Control.Else
+			F.Intrinsic.UI.Msgbox("No Time and Attendance Records for selected dates.  Exiting program.")
+			F.Data.DataTable.Close("Time")
+		F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.Catch
+		f.Intrinsic.Control.CallSub(ErrorMsg, CurrentSub, v.Ambient.CurrentSubroutine)
+	f.Intrinsic.Control.Finally
+		F.ODBC.Connection!Con.Close
+	f.Intrinsic.Control.EndTry
+Program.Sub.CreateFile.End
+
+Program.Sub.Create_Dir.Start
+F.Intrinsic.Control.SetErrorHandler("Create_Dir_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String,"")
+V.Local.bRet.Declare(Boolean,False)
+
+F.Intrinsic.Control.If(V.Caller.GlobalDir.Right1,=,"\")
+	F.Intrinsic.String.Build("{0}Custom\",V.Caller.GlobalDir,V.Global.sFileLocation)
+F.Intrinsic.Control.Else
+	F.Intrinsic.String.Build("{0}\Custom\",V.Caller.GlobalDir,V.Global.sFileLocation)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.File.DirExists(V.Global.sFileLocation,V.Local.bRet)
+
+F.Intrinsic.Control.If(V.Local.bRet,=,False)
+	F.Intrinsic.File.CreateDir(V.Global.sFileLocation)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("{0}6472\",V.Global.sFileLocation,V.Global.sFileLocation)
+
+F.Intrinsic.File.DirExists(V.Global.sFileLocation,V.Local.bRet)
+
+F.Intrinsic.Control.If(V.Local.bRet,=,False)
+	F.Intrinsic.File.CreateDir(V.Global.sFileLocation)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Create_Dir_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.String.Build("Project: GCG_6472_ProliantPayrollExport.g2u {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Form_PY_Export_UnLoad)
+Function.Intrinsic.Control.EndIf
+Program.Sub.Create_Dir.End
+
+Program.Sub.ErrorMsg.Start
+v.Local.sError.Declare
+
+'Closes ODBC connection, default to connection : "con"
+f.Intrinsic.Control.If(v.ODBC!con.State, =, 1)
+	f.ODBC.Connection!con.Close
+f.Intrinsic.Control.EndIf
+
+'Generic Error message.
+f.Intrinsic.String.Build("Project GCG_6472_ProliantPayrollExport.g2u {0}{0}Subroutine: {1}{0}Error: {2} with Description: {3}", v.Ambient.NewLine, v.Args.CurrentSub, v.Ambient.ErrorNumber, v.Ambient.ErrorDescription, v.Local.sError)
+f.Intrinsic.UI.Msgbox(v.Local.sError)
+Program.Sub.ErrorMsg.End
